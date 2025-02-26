@@ -1,0 +1,265 @@
+---
+title: "ANM_Lipid_Saturation"
+author: "Asger Wretlind"
+date: "2024-10-18"
+output: pdf_document
+---
+
+```{r Setup}
+#Load libraries
+library(tidyverse)
+library(here)
+library(vroom)
+
+#Set color palette
+color_palette <- c("#11A1B7", "#FF660C", "#0CA61E", "#FE3C1A",
+                   "#9966CC", "#4DDF2C", "#FE5387", "#85D0AB",
+                   "#18548A", "#FCBB0B", "#FD908F", "#DF56BD", "#F0E4AD")
+
+color_palette2 <- c("Cer" = "#935116", "DG" = "#b7950b","LacCer" = "#ec407a",
+                    "LPC" = "#48c9b0", "PA" = "#ec7063","PC" = "#2874a6",
+                    "PE" = "#7d3c98", "PI" = "#f8c471", "SM" = "#1e8449",
+                    "TG" = "#C71B42", "Not significant" = "#808080")
+
+```
+
+```{r Load data}
+#Load in linear regression data 
+reg_data <- vroom(here("data/sup_table_lipid_regression_v1.6.csv"))
+
+```
+
+```{r A. Volcano plot regression}
+library(ggrepel)
+
+#Volcano plot of regression data
+volcano_regression_A <- tibble(reg_data) %>%
+    filter(Outcome == "AD Female not Adjusted for APOE" |
+              Outcome == "AD Male not Adjusted for APOE")  %>% 
+    mutate(Outcome = gsub("AD Female not Adjusted for APOE", "Female", Outcome)) %>% 
+    mutate(Outcome = gsub("AD Male not Adjusted for APOE", "Male", Outcome)) %>%  
+    mutate(tmp_lipid = Lipid) %>% 
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    separate(tmp_lipid, sep = "\\(", c("Family", "Chain1")) %>% 
+    mutate(Family = ifelse(PvalFDR > 0.05, "Not significant", Family)) %>% 
+    ggplot(aes(x = Estimate, y = -log10(PvalFDR), color = Family))+
+    geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -log10(0.05), ymax = -Inf),
+              fill="grey", alpha=0.05, show.legend = FALSE)+
+    geom_point(alpha = 1)+
+    scale_color_manual(values = color_palette2,
+                       limits = names(color_palette2)[-11])+
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "grey")+
+    geom_text_repel(aes(label = Lipid), size = 3,
+                                        max.overlaps = 8, 
+                                        show.legend = FALSE)+
+    scale_y_continuous(limits = c(0,NA), labels = function(i) round(10^-i, 2))+
+    ylab(label = "P-value")+
+    xlab(label = "Estimate")+
+    labs(color = "Lipid\nFamily")+
+    facet_grid(.~Outcome)+
+    theme_bw()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          legend.text = element_text(face = "bold"),
+          axis.title = element_text(face = "bold"),
+          legend.title = element_text(face =  "bold"),
+          legend.position = "bottom")
+
+# #Save figure
+# pdf(here("figures/Volcano_regression_v1.0.pdf"), width = 8, height = 5)
+
+volcano_regression_A
+
+# dev.off()
+```
+
+```{r BCD. Individual lipid boxplot}
+library(ggpubr)
+library(grid)
+
+#Load data
+data <- vroom(here("data/ANM_Lipid_Preprocessed_v4.csv"))
+
+colnames(data) <- colnames(data) %>% 
+    gsub("\\(", "", .) %>% 
+    gsub("\\)", "", .) %>% 
+    gsub("\\:", "", .) %>% 
+    gsub("\\-", "", .) %>% 
+    gsub("\\_", "", .) %>% 
+    gsub("\\/", "", .)
+
+my_comparisons <- list( c("Ctrl", "MCI"), c("Ctrl", "AD"))
+
+#Boxplot of PC(36:5)
+Box_PC <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = PC365, fill = Status))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#2874a6",
+                                 "#67a8dd", 
+                                 "#d4f4ff"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "PC(36:5)")+
+    ylab("Amount")+
+    stat_compare_means(comparisons = my_comparisons, 
+                       method = "t.test",
+                       label = "p.signif",
+                       na.rm = TRUE,
+                       vjust = 1.25)+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          #axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          axis.title.y = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+Box_PC
+
+#Boxplot of PE(40:7)
+Box_PE <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = PE385, fill = Status))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#7d3c98",
+                                 "#a17ead", 
+                                 "#ffe8ff"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "PE(40:7)")+
+    stat_compare_means(comparisons = my_comparisons, 
+                       method = "t.test",
+                       label = "p.signif",
+                       na.rm = TRUE,
+                       vjust = 1.25)+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+Box_PE
+
+#Boxplot of TG(58:10)
+Box_TG <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = TG5810, fill = Status))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#c71b42",
+                                 "#ff6678", 
+                                 "#ffa7b4"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "TG(58:10)")+
+    stat_compare_means(comparisons = my_comparisons,
+                       method = "t.test",
+                       label = "p.signif",
+                       na.rm = TRUE,
+                       vjust = 1.25)+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+Box_TG
+
+```
+
+
+```{r E. Unsaturation plots}
+library(ggh4x)
+
+#Individual strip colors
+tmp_strip <- strip_themed(background_x = elem_list_rect(fill = color_palette2[c("PC", "PE", "TG")]))
+
+#Individual scales
+tmp_scale <- list(
+    scale_x_continuous(breaks = 0:10,
+                       limits = c(0, 10)), #PC
+    scale_x_continuous(breaks = 0:7,
+                       limits = c(0, 7)),  #PE
+    scale_x_continuous(breaks = 0:11,
+                       limits = c(0, 11))) #TG
+
+#subset and plot
+Unsaturation_plot_B <- tibble(reg_data) %>% 
+    mutate(lipid_family = str_extract(Lipid, ".*?(?=\\()")) %>% 
+    mutate(double_bonds = str_extract(Lipid, ":\\d+\\)")) %>%
+    mutate(double_bonds = as.numeric(str_extract(double_bonds, "\\d+"))) %>%
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    filter(Outcome == "AD Female not Adjusted for APOE" |
+              Outcome == "AD Male not Adjusted for APOE")  %>% 
+    mutate(Outcome = gsub("AD Female not Adjusted for APOE", "Female", Outcome)) %>% 
+    mutate(Outcome = gsub("AD Male not Adjusted for APOE", "Male", Outcome)) %>% 
+    filter(lipid_family == "TG" |
+               lipid_family == "PC" |
+               lipid_family == "PE") %>% 
+    ggplot(aes(x = double_bonds, y = Estimate, color = Outcome))+
+    geom_hline(yintercept = 0, colour = "#808080", linetype = "dashed")+
+    geom_point(alpha = 0.7)+
+    geom_smooth(method = lm, show.legend = FALSE)+
+    scale_color_manual(values = c("#e66101", "#5e3c99"))+
+    xlab("Degree of Unsaturation")+
+    ylab("Association to AD")+
+    facet_wrap2(.~lipid_family, strip = tmp_strip, scales = "free")+
+    facetted_pos_scales(x = tmp_scale)+
+    theme_bw()+
+    theme(legend.title = element_blank(),
+          strip.text.x = element_text(face = "bold"),
+          axis.title = element_text(face = "bold"),
+          legend.position = "bottom")
+
+# #Save figure
+# pdf(here("figures/Unsaturation_plot_v1.0.pdf"), width = 8, height = 4)
+
+Unsaturation_plot_B
+
+# dev.off()
+
+rm(tmp_strip, tmp_scale)
+```
+
+```{r Figure 3, fig.width=12, fig.height=10}
+library(patchwork)
+
+#Load Mediation plot
+Mediation_plot <- readRDS(here("data/Mediation_plot_v1.4.rds"))
+
+# # #Load dag plot
+# Dag_plot <- readRDS(here("data/dag_plot_v1.0.rds"))
+
+#Merge plots for Figure 3
+# Figure3 <- (volcano_regression_A / Mediation_plot)+
+#     plot_layout(heights = c(5, 1))
+
+Figure3 <- (volcano_regression_A | ((Box_PC | Box_PE | Box_TG) / 
+                     Unsaturation_plot_B))/Mediation_plot +
+             plot_layout(heights = c(6, 1))
+
+Figure3 <- Figure3 + plot_annotation(tag_levels = 'A')
+    
+# #Save figure
+# pdf(here("figures/Figue_3_unsaturated_plot_v1.6.pdf"),
+#     width = 12, height = 10)
+
+Figure3
+
+# dev.off()
+
+#rm(fig4_A_volcano, fig4_B_venn, fig4_C_barplot, Figure4)
+```

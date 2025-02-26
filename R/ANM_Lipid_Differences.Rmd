@@ -1,0 +1,795 @@
+---
+title: "ANM_Lipid_Differences"
+author: "Asger Wretlind"
+date: "2024-04-23"
+output: pdf_document
+---
+
+```{r Setup}
+#Load libraries
+library(tidyverse)
+library(here)
+library(vroom)
+library(tableone)
+
+#Set color palette
+color_palette <- c("#11A1B7", "#FF660C", "#0CA61E", "#FE3C1A",
+                   "#9966CC", "#4DDF2C", "#FE5387", "#85D0AB",
+                   "#18548A", "#FCBB0B", "#FD908F", "#DF56BD", "#F0E4AD")
+
+color_palette2 <- c("Cer" = "#935116", "DG" = "#b7950b","LacCer" = "#ec407a",
+                    "LPC" = "#48c9b0", "PA" = "#ec7063","PC" = "#2874a6",
+                    "PE" = "#7d3c98", "PI" = "#f8c471", "SM" = "#1e8449",
+                    "TG" = "#C71B42", "Not significant" = "#808080")
+
+```
+
+```{r Load Data}
+#Load data
+data <- vroom(here("data/ANM_Lipid_Preprocessed_v4.csv"))
+
+#Load list of selected lipids
+selected_lipids <- vroom(here("data/ANM_module_selected_lipids_res_v1.1.csv"))
+
+```
+
+```{r Table 1 - Participant characteristics}
+#Characteristics of of interest
+tmp_vars <- c("Age", "Sex", "APOE-e4", "Total_Cholesterol", "LDL", "HDL", "Total_Triglyceride", "ApoB", "MMSE_Score", "Fulltime_Education_Years", "Marital_Status")
+
+table1 <- data %>% 
+    mutate(e4_c = factor(e4_c, levels = c(0, 1, 2),
+                         labels = c("Absent", "Heterozygote", "Homozygote"))) %>%
+    rename("APOE-e4" = e4_c) %>%
+    rename("Total_Cholesterol" = Total_C) %>%
+    rename("LDL" = LDL_C) %>%
+    rename("HDL" = HDL_C) %>%
+    rename("Total_Triglyceride" = Total_TG) %>%
+    rename("MMSE_Score" = MMSE_Total) %>%
+    CreateTableOne(vars = tmp_vars, 
+                   strata = "Status",
+                   addOverall = TRUE)
+
+table1
+
+#write.csv(print(table1, printToggle = FALSE), here("data/table1_v1.1.csv"))
+
+#Average AD disease duration
+print(paste("Average AD disease duration", 
+    data %>% 
+    filter(Status == "ADC") %>% 
+    pull(Disease_Duration) %>% 
+    mean(., na.rm = TRUE) %>% 
+    round(., digits = 2),
+    "years"))
+
+#Average age at AD onset
+print(paste("Average age at AD onset", 
+    data %>% 
+    filter(Status == "ADC") %>% 
+    pull(Onset_Age) %>% 
+    mean(., na.rm = TRUE) %>% 
+    round(., digits = 2),
+    "years"))
+
+##Participants characteristics stratified by sex
+
+#Swap sex with AD status
+tmp_vars[which(tmp_vars == "Sex")] <- "Status"
+
+table2 <- data %>% 
+    mutate(e4_c = factor(e4_c, levels = c(0, 1, 2),
+                         labels = c("Absent", "Heterozygote", "Homozygote"))) %>%
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                         labels = c("Ctrl", "MCI", "ADC"))) %>%
+    rename("APOE-e4" = e4_c) %>%
+    rename("Total_Cholesterol" = Total_C) %>%
+    rename("LDL" = LDL_C) %>%
+    rename("HDL" = HDL_C) %>%
+    rename("Total_Triglyceride" = Total_TG) %>%
+    rename("MMSE_Score" = MMSE_Total) %>%
+    CreateTableOne(vars = tmp_vars, 
+                   strata = "Sex",
+                   addOverall = TRUE)
+
+table2
+
+#write.csv(print(table2, printToggle = FALSE), here("data/table2_v1.0.csv"))
+
+rm(tmp_vars, table1, table2)
+```
+
+```{r Min-max normalization function}
+#Function that takes a continuous variable and normalizes so that the maximum value is 1 and the minimum value is 0 and the remaining values are decimals in between 0 and 1
+Mm_normalize <- function(x){
+    return((x- min(x)) /(max(x)-min(x)))
+}
+
+```
+
+```{r Subsetting data by sex and AD status}
+#List of lipids
+lipids <- colnames(data)[which(colnames(data) == "Cer(d42:0)"):length(data)]
+
+#data is Min-max normalized to get consistent direction of fold change
+data_norm <- data %>% 
+    mutate(across(all_of(lipids), ~ Mm_normalize(.)))
+
+#Create subsets of the data stratified by sex and AD status
+data_female_AD <- data_norm %>% 
+    filter(Sex == "Female") %>% 
+    filter(Status == "ADC") 
+
+data_female_ctrl <- data_norm %>% 
+    filter(Sex == "Female") %>% 
+    filter(Status == "CTL") 
+    
+
+data_male_AD <- data_norm %>% 
+    filter(Sex == "Male")  %>% 
+    filter(Status == "ADC")
+    
+
+data_male_ctrl <- data_norm %>% 
+    filter(Sex == "Male")  %>% 
+    filter(Status == "CTL")
+    
+```
+
+```{r T-test extraction function}
+#Function that takes in two data sets and a list of lipids and outputs a dataframe of the mean difference and t-test p-value for each lipid in the list
+Ttest_extract <-  function(data_1, data_2, list_of_lipids){
+    output_dataframe <- data.frame("mean_diff" = c(), 
+                                   "fold_change" = c(), 
+                                   "p_value" = c())
+    
+    for(i in list_of_lipids){
+        tmp_model <- t.test(data_1[i], data_2[i])
+        tmp_mean_diff <- tmp_model$estimate[[1]]-tmp_model$estimate[[2]]
+        tmp_fold_change <- tmp_model$estimate[[1]]/tmp_model$estimate[[2]]
+        tmp_pval <- tmp_model$p.value
+        
+        output_dataframe[i, "mean_diff"] <- tmp_mean_diff
+        output_dataframe[i, "fold_change"] <- tmp_fold_change
+        output_dataframe[i, "p_value"] <- tmp_pval
+        
+    }
+    
+    output_dataframe$Lipid <- rownames(output_dataframe)
+    output_dataframe$FDR <- p.adjust(output_dataframe$p_value, method = "fdr")
+    output_dataframe <- output_dataframe[, c("Lipid", "mean_diff", "fold_change",
+                                           "p_value", "FDR")]
+    
+    return(output_dataframe)
+
+}
+
+```
+
+```{r Difference between AD and CTL}
+library(ggrepel)
+
+#In women
+ttest_female_AD <- Ttest_extract(data_1 = data_female_AD,
+                                 data_2 = data_female_ctrl,
+                                 list_of_lipids = lipids)
+
+
+
+# #Save figure
+# pdf(here("figures/Volcano_female_AD-ctrl_v1.0.pdf"), width = 6, height = 5)
+
+#Volcano plot
+tibble(ttest_female_AD) %>% 
+    left_join(., selected_lipids) %>% 
+    mutate(tmp_lipid = Lipid) %>% 
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    separate(tmp_lipid, sep = "\\(", c("Family", "Chain1")) %>% 
+    mutate(Family = ifelse(FDR > 0.05, "Not significant", Family)) %>% 
+    ggplot(aes(x = fold_change, y = -log10(FDR), color = Family))+
+    geom_rect(aes(xmin = -Inf, xmax = Inf,
+                  ymin = -log10(0.05), ymax = -Inf),
+              fill="grey", alpha=0.05, show.legend = FALSE)+
+    geom_point(alpha = 1)+
+    scale_color_manual(values = color_palette2,
+                       limits = names(color_palette2)[-11])+
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "grey")+
+    geom_text_repel(aes(label = Lipid), show.legend = FALSE) +
+    scale_y_continuous(limits = c(0,NA), labels = function(i) 10^-i)+
+    ylab(label = "P-value")+
+    xlab(label = "Fold change")+
+    theme_bw()+
+    theme()
+    #legend.position = "none")
+
+# dev.off()
+
+print(paste0("Number of lipids with a p-value < 0.05: ", sum(ttest_female_AD$FDR < 0.05)))
+
+
+#In men
+ttest_male_AD <- Ttest_extract(data_1 = data_male_AD,
+                                 data_2 = data_male_ctrl,
+                                 list_of_lipids = lipids)
+# #Save figure
+# pdf(here("figures/Volcano_male_AD-ctrl_v1.0.pdf"), width = 5, height = 5)
+
+#Volcano plot
+tibble(ttest_male_AD) %>% 
+    left_join(., selected_lipids) %>% 
+    mutate(tmp_lipid = Lipid) %>% 
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    separate(tmp_lipid, sep = "\\(", c("Family", "Chain1")) %>% 
+    mutate(Family = ifelse(FDR > 0.05, "Not significant", Family)) %>% 
+    ggplot(aes(x = fold_change, y = -log10(FDR), color = Family))+
+    geom_rect(aes(xmin = -Inf, xmax = Inf,
+                  ymin = Inf, ymax = -Inf),
+              fill="grey", alpha=0.05, show.legend = FALSE)+
+    geom_point(alpha = 1)+
+    scale_color_manual(values = color_palette2,
+                       limits = names(color_palette2)[-11])+
+    #geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "grey")+
+    geom_text_repel(aes(label = Lipid), show.legend = FALSE)+
+    scale_y_continuous(limits = c(0,NA), labels = function(i) round(10^-i, 2))+
+    ylab(label = "P-value")+
+    xlab(label = "Fold change")+
+    theme_bw()+
+    theme(legend.position = "none")
+
+# dev.off()
+
+print(paste0("Number of lipids with a p-value < 0.05: ", sum(ttest_male_AD$FDR < 0.05)))
+
+
+#Add Sex variable before merging
+ttest_female_AD$Sex <- "Female"
+
+#Facet male and female ttest_AD
+fig3_A_volcano <- ttest_male_AD %>% 
+    mutate(Sex = "Male") %>% 
+    rbind(., ttest_female_AD) %>% 
+    tibble() %>% 
+    left_join(., selected_lipids) %>% 
+    mutate(tmp_lipid = Lipid) %>% 
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    separate(tmp_lipid, sep = "\\(", c("Family", "Chain1")) %>% 
+    mutate(Family = ifelse(FDR > 0.05, "Not significant", Family)) %>% 
+    ggplot(aes(x = fold_change, y = -log10(FDR), color = Family))+
+    geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -log10(0.05), ymax = -Inf),
+              fill="grey", alpha=0.05, show.legend = FALSE)+
+    geom_point(alpha = 1)+
+    scale_color_manual(values = color_palette2,
+                       limits = names(color_palette2)[-11])+
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "grey")+
+    geom_text_repel(aes(label = Lipid), size = 3,
+                                        max.overlaps = 8, 
+                                        show.legend = FALSE)+
+    scale_y_continuous(limits = c(0,NA), labels = function(i) 10^-i)+
+    ylab(label = "P-value")+
+    xlab(label = "Fold change")+
+    labs(color = "Lipid\nFamily")+
+    facet_grid(.~Sex)+
+    theme_bw()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          legend.text = element_text(face = "bold"),
+          axis.title = element_text(face = "bold"),
+          legend.title = element_text(face =  "bold"),
+          legend.position="bottom")
+
+# #Save figure
+# pdf(here("figures/Volcano_sex_AD-ctrl_v1.4.pdf"), width = 8, height = 5)
+
+fig3_A_volcano
+
+# dev.off()
+
+#Supplementary table
+tmp_table <- ttest_male_AD %>% 
+    mutate(Sex = "Male") %>% 
+    rbind(., ttest_female_AD) %>% 
+    tibble()
+
+# #Export supplementary table
+# vroom_write(tmp_table, here("data/sup_table_ttest_v1.1.csv"))
+
+#clean
+rm(ttest_male_AD, tmp_table)
+```
+
+```{r Difference between men and women}
+#difference between women and men with AD
+ttest_sex_AD <- Ttest_extract(data_1 = data_female_AD,
+                                 data_2 = data_male_AD,
+                                 list_of_lipids = lipids)
+
+#difference between healthy women and men 
+ttest_sex_ctrl <- Ttest_extract(data_1 = data_female_ctrl,
+                                 data_2 = data_male_ctrl,
+                                 list_of_lipids = lipids)
+
+#Add Status variable before merging
+ttest_sex_ctrl$Status <- "Healthy male vs. healthy female"
+
+#Facet male and female ttest_AD
+fig4_A_volcano <- ttest_sex_AD %>% 
+    mutate(Status = "Male with AD vs. female with AD") %>% 
+    rbind(ttest_sex_ctrl, .) %>% 
+    tibble() %>% 
+    left_join(., selected_lipids) %>% 
+    mutate(tmp_lipid = Lipid) %>% 
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    separate(tmp_lipid, sep = "\\(", c("Family", "Chain1")) %>% 
+    mutate(Family = ifelse(FDR > 0.05, "Not significant", Family)) %>% 
+    ggplot(aes(x = fold_change, y = -log10(FDR), color = Family))+
+    geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -log10(0.05), ymax = -Inf),
+              fill="grey", alpha=0.05, show.legend = FALSE)+
+    geom_point(alpha = 1)+
+    scale_color_manual(values = color_palette2,
+                       limits = names(color_palette2)[-11])+
+    geom_hline(yintercept = -log10(0.05), colour = "#808080")+
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "grey")+
+    geom_text_repel(aes(label = Lipid), size = 3,
+                                        max.overlaps = 8, 
+                                        show.legend = FALSE)+
+    scale_y_continuous(limits = c(0,NA), labels = function(i) 10^-i)+
+    ylab(label = "P-value")+
+    xlab(label = "Fold change")+
+    labs(color = "Lipid\nFamily")+
+    facet_grid(.~Status)+
+    theme_bw()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          legend.text = element_text(face = "bold"),
+          axis.title = element_text(face = "bold"),
+          legend.title = element_text(face =  "bold"))
+
+# #Save figure
+# pdf(here("figures/Supplementary_volcano_Female_vs_male_v1.3.pdf"), width = 8, height = 5)
+
+fig4_A_volcano
+
+# dev.off()
+
+rm(data_female_AD, data_female_ctrl, data_male_AD, data_male_ctrl)
+```
+
+```{r Proportional Venn diagram}
+library(eulerr)
+
+#Create list for ploting
+venn_list <- list(
+    "Healthy male vs. healthy female" = ttest_sex_ctrl$Lipid[ttest_sex_ctrl$FDR < 0.05],
+    "Male with AD vs. female with AD" = ttest_sex_AD$Lipid[ttest_sex_AD$FDR < 0.05])
+
+#Plot
+fig4_B_venn <- plot(euler(venn_list), 
+     quantities = TRUE,
+     fills = c("#FCBB0B", "#00BE7F" , "#A8B300"),
+     list(col = "white", lex = 2),
+     legend = list(side = "bottom",
+                   cex = 0.8))
+
+# #Save figure
+# pdf(here("figures/Supplementary_venn_lipid_difference_v1.1.pdf"), width = 5, height = 3)
+
+fig4_B_venn
+
+# dev.off()
+
+rm(venn_list)
+```
+
+```{r Bargraph fold change}
+#Subset AD vs. AD only
+AD_vs_AD <- ttest_sex_AD[ttest_sex_AD$FDR < 0.05,][!ttest_sex_AD$Lipid[ttest_sex_AD$FDR < 0.05] %in% ttest_sex_ctrl$Lipid[ttest_sex_ctrl$FDR < 0.05],] 
+
+#Plot
+fig4_C_barplot <- 
+    AD_vs_AD %>% 
+    arrange(fold_change) %>% 
+    mutate(lipid_family = str_extract(Lipid, ".*?(?=\\()")) %>% 
+    mutate(Lipid = gsub("_A", "", Lipid)) %>% 
+    mutate(Lipid = gsub("_B", "", Lipid)) %>% 
+    mutate(Lipid = factor(Lipid, levels = c(rev(Lipid)))) %>% 
+    ggplot(aes(x = fold_change, y = Lipid, fill = lipid_family))+
+    geom_bar(stat = "identity")+
+    xlab(label = "Fold change")+
+    ggtitle("Lipid differences between\nmales and females with AD")+
+    scale_fill_manual(values = color_palette2)+
+    geom_vline(xintercept = 1, color = "black", linetype = "dashed")+
+    coord_cartesian(xlim = c(0.8, 1.2))+
+    theme_bw()+
+    theme(axis.title.y = element_blank(),
+          axis.title.x = element_text(face =  "bold"),
+          plot.title = element_text(size = 11, face = "bold"),
+          legend.position = "none")
+
+# #Save figure
+# pdf(here("figures/Supplementary_bar_lipid_difference_v1.3.pdf"), width = 6, height = 4)
+
+fig4_C_barplot
+
+# dev.off()
+
+rm(ttest_sex_AD, ttest_sex_ctrl, AD_vs_AD)
+```
+
+```{r Figure 4, fig.width=8, fig.height=7}
+library(patchwork)
+
+#Merge plots for Figure 2
+Figure4 <- fig4_A_volcano / (wrap_elements(fig4_B_venn, clip = FALSE) | fig4_C_barplot) +
+    plot_annotation(tag_levels = 'A')
+
+# #Save figure
+# pdf(here("figures/Figue_4_lipid_differences_women_vs_men_v1.0.pdf"), 
+#     width = 8, height = 7) 
+
+Figure4
+
+# dev.off()
+
+rm(fig4_A_volcano, fig4_B_venn, fig4_C_barplot, Figure4)
+```
+
+```{r Individual lipid boxplot, fig.width=10, fig.height=4}
+#Boxplot of PE(38:5)
+Box_PE <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = `PE(38:5)`, fill = Status))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#7d3c98",
+                                 "#a17ead", 
+                                 "#ffe8ff"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "PE(38:5)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          #axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+#Boxplot of TG(58:11)
+Box_TG <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = `TG(58:11)`, fill = Status))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#c71b42",
+                                 "#ff6678", 
+                                 "#ffa7b4"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "TG(58:11)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+#Boxplot of PC(O-34:0)
+Box_PC <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = `PC(O-34:0)`, fill = Status))+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#2874a6",
+                                 "#67a8dd", 
+                                 "#d4f4ff"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "PC(O-34:0)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+#Boxplot of SM(d34:1)
+Box_SM <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    ggplot(aes(x = Status, y = `SM(d34:1)`, fill = Status))+
+    #geom_hline(yintercept = 0, color = "black")+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#1e8449",
+                                 "#5bba7a", 
+                                 "#d4fadd"))+
+    facet_grid(. ~ Sex)+
+    labs(title = "SM(d34:1)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+#Merge Plots 
+library(patchwork)
+sup_fig2_boxplot <- plot_annotation(Box_PE | Box_TG | Box_PC | Box_SM)
+
+#Save figure
+# pdf(here("figures/Box_plot_individual_lipids_Ctrl_MCI_AD_v1.1.pdf"), width = 10, height = 4)
+
+sup_fig2_boxplot
+
+# dev.off()
+
+#clean
+#rm(Box_PC, Box_PE, Box_SM, Box_TG)
+```
+
+```{r Figure 3, fig.width=10, fig.height=9}
+# library(patchwork)
+# 
+# #Load heatmap from "ANM_Lipid_Regression.Rmd"
+# fig2_heatmap <- readRDS(file = here("data/Heatmap_lipid_regression_v1.0.rds"))
+# 
+# #Shuffling legends around for final figure 2 composistion
+# fig2_volcano2 <- fig4_A_volcano+theme(legend.position = "bottom")
+# 
+# fig2_heatmap2 <- fig2_heatmap+theme(legend.position = "none")
+# 
+# Box_PE2 <- Box_PE+
+#     ylab(label = "Abundance")+
+#     theme(axis.title.y =  element_text(face = "bold"),
+#               axis.text.x = element_text(angle = 45))
+# 
+# Box_TG2 <- Box_TG+
+#     theme(axis.text.x = element_text(angle = 45))
+# 
+# #Merge plots for Figure 2
+# Figure2 <- (fig2_heatmap2 | (fig2_volcano2 / (Box_PE2 | Box_TG2 ))) +
+#     plot_annotation(tag_levels = "A")
+# 
+# # #Save figure
+# # pdf(here("figures/Figue_2_individual_lipids_Analysis_v1.1.pdf"), width = 10, height = 9)
+# 
+# Figure2
+# 
+# # dev.off()
+```
+
+```{r Supplementary volcano plots of APOE, fig.width=7, fig.height=7}
+#Create subsets of the data stratified by sex and AD status
+data_FAD <- data_norm %>% 
+    filter(Sex == "Female") %>% 
+    filter(Status == "ADC") %>% 
+    filter(!is.na(e4_c))
+
+data_FCTRL <- data_norm %>% 
+    filter(Sex == "Female") %>% 
+    filter(Status == "CTL") %>% 
+    filter(!is.na(e4_c))
+    
+data_MAD <- data_norm %>% 
+    filter(Sex == "Male")  %>% 
+    filter(Status == "ADC")%>% 
+    filter(!is.na(e4_c))
+    
+data_MCTRL <- data_norm %>% 
+    filter(Sex == "Male")  %>% 
+    filter(Status == "CTL")%>% 
+    filter(!is.na(e4_c))
+
+#t-tests
+ttest_M0 <- Ttest_extract(data_1 = data_MAD[data_MAD$e4_c == 0,],
+                          data_2 = data_MCTRL[data_MCTRL$e4_c == 0,],
+                          list_of_lipids = lipids)
+
+ttest_M1 <- Ttest_extract(data_1 = data_MAD[data_MAD$e4_c == 1,],
+                          data_2 = data_MCTRL[data_MCTRL$e4_c == 1,],
+                          list_of_lipids = lipids)
+
+ttest_M2 <- Ttest_extract(data_1 = data_MAD[data_MAD$e4_c == 2,],
+                          data_2 = data_MCTRL[data_MCTRL$e4_c == 2,],
+                          list_of_lipids = lipids)
+
+ttest_F0  <- Ttest_extract(data_1 = data_FAD[data_FAD$e4_c == 0,],
+                          data_2 = data_FCTRL[data_FCTRL$e4_c == 0,],
+                          list_of_lipids = lipids)
+
+ttest_F1  <- Ttest_extract(data_1 = data_FAD[data_FAD$e4_c == 1,],
+                          data_2 = data_FCTRL[data_FCTRL$e4_c == 1,],
+                          list_of_lipids = lipids)
+
+ttest_F2  <- Ttest_extract(data_1 = data_FAD[data_FAD$e4_c == 2,],
+                          data_2 = data_FCTRL[data_FCTRL$e4_c == 2,],
+                          list_of_lipids = lipids)
+#Create APOE variable
+ttest_M0$APOE <- ttest_F0$APOE <- "No APOE4"
+ttest_M1$APOE <- ttest_F1$APOE <- "APOE4 Heterozygote"
+ttest_M2$APOE <- ttest_F2$APOE <- "APOE4 Homozygote"
+
+#Create sex variable
+ttest_F0$Sex <- ttest_F1$Sex <- ttest_F2$Sex <- "Female"
+ttest_M0$Sex <- ttest_M1$Sex <- ttest_M2$Sex <- "Male"
+
+#Merge and plot as volcano plot
+sup_volcano <- ttest_M0 %>% 
+    rbind(., ttest_M1, ttest_M2, ttest_F0, ttest_F1, ttest_F2) %>% 
+    tibble() %>% 
+    mutate(APOE = factor(APOE, levels = c("No APOE4",
+                                        "APOE4 Heterozygote",
+                                        "APOE4 Homozygote"))) %>% 
+    left_join(., selected_lipids) %>% 
+    mutate(tmp_lipid = Lipid) %>% 
+    separate(tmp_lipid, sep = "\\(", c("Family", "Chain1")) %>% 
+    mutate(Family = ifelse(FDR > 0.05, "Not significant", Family)) %>% 
+    ggplot(aes(x = fold_change, y = -log10(FDR), color = Family))+
+    geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = -log10(0.05), ymax = -Inf),
+              fill="grey", alpha=0.05, show.legend = FALSE)+
+    geom_point(alpha = 1)+
+    scale_color_manual(values = color_palette2,
+                       limits = names(color_palette2)[-11])+
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", colour = "grey")+
+    geom_text_repel(aes(label = Lipid), size = 2,
+                                        max.overlaps = 11,
+                                        show.legend = FALSE)+
+    scale_y_continuous(limits = c(0,NA), labels = function(i) round(10^-i, 2))+
+    ylab(label = "P-value")+
+    xlab(label = "Fold change")+
+    labs(color = "Lipid\nFamily")+
+    facet_grid(APOE ~ Sex)+
+    theme_bw()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          legend.text = element_text(face = "bold"),
+          axis.title = element_text(face = "bold"),
+          legend.title = element_text(face =  "bold"))
+
+
+# #Save figure
+# pdf(here("figures/Supplementary_volcano_AD-ctrl_APOE_sex_v1.0.pdf"), width = 7, height = 7)
+
+sup_volcano
+
+# dev.off()
+
+#clean
+rm(data_FAD, data_FCTRL, data_MAD, data_MCTRL, sup_volcano,
+   ttest_F0, ttest_F1, ttest_F2, ttest_M0, ttest_M1, ttest_M2,
+   ttest_sex_AD, ttest_sex_ctrl)
+
+rm(data_female_AD, data_female_ctrl, data_male_AD, data_male_ctrl, data_norm,
+   Mm_normalize, Ttest_extract)
+```
+
+```{r Boxplot subsetted for APOE, fig.width=10, fig.height=7}
+#Boxplot of PE(38:5)
+Box_APOE_PE <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    mutate(APOE = factor(e4_c, levels = c(0, 1, 2), 
+                labels = c("No APOE4", "APOE4 Heterozygote", "APOE4 Homozygote"))) %>% 
+    filter(!is.na(APOE)) %>% 
+    ggplot(aes(x = Status, y = `PE(38:5)`, fill = Status))+
+    #geom_hline(yintercept = 0, color = "black")+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#7d3c98",
+                                 "#a17ead", 
+                                 "#ffe8ff"))+
+    facet_grid(APOE ~ Sex)+
+    labs(title = "PE(38:5)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text.x.top = element_text(face = "bold", size = 12),
+          strip.text.y.right = element_blank(),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+    
+#Boxplot of TG(58:11)
+Box_APOE_TG <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    mutate(APOE = factor(e4_c, levels = c(0, 1, 2), 
+                labels = c("No APOE4", "APOE4 Heterozygote", "APOE4 Homozygote"))) %>% 
+    filter(!is.na(APOE)) %>% 
+    ggplot(aes(x = Status, y = `TG(58:11)`, fill = Status))+
+    #geom_hline(yintercept = 0, color = "black")+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#935116",
+                                 "#ce8347", 
+                                 "#ffe9cf"))+
+    facet_grid(APOE ~ Sex)+
+    labs(title = "TG(58:11)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text.x.top = element_text(face = "bold", size = 12),
+          strip.text.y.right = element_blank(),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+#Boxplot of PC(O-34:0)
+Box_APOE_PC <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    mutate(APOE = factor(e4_c, levels = c(0, 1, 2), 
+                labels = c("No APOE4", "APOE4 Heterozygote", "APOE4 Homozygote"))) %>% 
+    filter(!is.na(APOE)) %>% 
+    ggplot(aes(x = Status, y = `PC(O-34:0)`, fill = Status))+
+    #geom_hline(yintercept = 0, color = "black")+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#2874a6",
+                                 "#67a8dd", 
+                                 "#d4f4ff"))+
+    facet_grid(APOE ~ Sex)+
+    labs(title = "PC(O-34:0)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text.x.top = element_text(face = "bold", size = 12),
+          strip.text.y.right = element_blank(),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+#Boxplot of SM(d34:1)
+Box_APOE_SM <- data %>% 
+    mutate(Status = factor(Status, levels = c("CTL", "MCI", "ADC"),
+                           labels = c("Ctrl", "MCI", "AD"))) %>%
+    mutate(APOE = factor(e4_c, levels = c(0, 1, 2), 
+                labels = c("No APOE4", "APOE4 Heterozygote", "APOE4 Homozygote"))) %>% 
+    filter(!is.na(APOE)) %>% 
+    ggplot(aes(x = Status, y = `SM(d34:1)`, fill = Status))+
+    #geom_hline(yintercept = 0, color = "black")+
+    geom_boxplot(outlier.shape = NA)+
+    geom_jitter(alpha = 0.1)+
+    scale_fill_manual(values = c("#1e8449",
+                                 "#5bba7a", 
+                                 "#d4fadd"))+
+    facet_grid(APOE ~ Sex)+
+    labs(title = "SM(d34:1)")+
+    theme_bw()+
+    theme(axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.position = "none",
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 12),
+          axis.text.x = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5))
+
+sup_boxplot_APOE <- plot_annotation(Box_APOE_PE | Box_APOE_TG | Box_APOE_PC | Box_APOE_SM)
+
+
+# #Save figure
+# pdf(here("figures/Supplementary_Box_plot_individual_lipids_APOE_Ctrl_MCI_AD_v1.0.pdf"), width = 10, height = 7)
+
+sup_boxplot_APOE
+
+# dev.off()
+
+#clean
+rm(Box_APOE_PE, Box_APOE_TG, Box_APOE_PC, Box_APOE_SM, sup_boxplot_APOE)
+```
+
+
