@@ -9,7 +9,7 @@ The following folders contain:
 This project involves personal data, which is available with the right legal permission, thus raw data is not available here
 
 - `data/`: This folder contains outputted tables
-- `Figures/`: This Folder contains exported figures
+- `figures/`: This Folder contains exported figures
 - `R/`: This folder have the script used for data processing and the script used for the data analysis, as well as their markdown documentation.
 
 
